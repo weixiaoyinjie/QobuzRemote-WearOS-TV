@@ -16,43 +16,74 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - name: Unzip complete Android project
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Qobuz Remote Android project
         shell: bash
         run: |
           set -euo pipefail
-          test -s QobuzRemote_v1_OneUpload.zip
+          test -s QobuzRemote_v1_OneUpload.zip || { echo 'Missing QobuzRemote_v1_OneUpload.zip at repository root'; exit 1; }
           mkdir -p android-project
           unzip -qo QobuzRemote_v1_OneUpload.zip -d android-project
           test -s android-project/settings.gradle
+          test -s android-project/phone/build.gradle
+          test -s android-project/watch/build.gradle
+          test -s android-project/tv/build.gradle
           test -s android-project/phone/src/main/java/com/local/qobuzremote/MainActivity.java
           test -s android-project/watch/src/main/java/com/local/qobuzremote/WatchActivity.java
           test -s android-project/tv/src/main/java/com/local/qobuzbridge/BridgeService.java
-      - uses: actions/setup-java@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK 35
-        uses: android-actions/setup-android@v3
-      - name: Install required SDK packages
+
+      # Do not use android-actions/setup-android@v3:
+      # GitHub-hosted Ubuntu runners already include an Android SDK.
+      - name: Use preinstalled Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          test -d "$SDK" || { echo "Android SDK directory not found: $SDK"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "Android SDK: $SDK"
+          ls "$SDK/platforms" 2>/dev/null || true
+          ls "$SDK/build-tools" 2>/dev/null || true
+          if [[ ! -f "$SDK/platforms/android-35/android.jar" || ! -d "$SDK/build-tools/35.0.0" ]]; then
+            MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+            if [[ ! -x "$MANAGER" ]]; then
+              MANAGER="$(command -v sdkmanager || true)"
+            fi
+            test -n "$MANAGER" && test -x "$MANAGER" || { echo 'sdkmanager not found'; exit 1; }
+            yes | "$MANAGER" --sdk_root="$SDK" --licenses >/dev/null || true
+            "$MANAGER" --sdk_root="$SDK" 'platforms;android-35' 'build-tools;35.0.0'
+          fi
+          test -f "$SDK/platforms/android-35/android.jar" || { echo 'Android SDK platform 35 missing'; exit 1; }
+          test -d "$SDK/build-tools/35.0.0" || { echo 'Android build tools 35.0.0 missing'; exit 1; }
+
       - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build 3 APKs
+
+      - name: Build phone, Wear OS, and TV debug APKs
         shell: bash
-        run: gradle --no-daemon -p android-project :phone:assembleDebug :watch:assembleDebug :tv:assembleDebug --stacktrace
-      - name: Upload all APKs
+        run: |
+          set -euo pipefail
+          gradle --no-daemon -p android-project :phone:assembleDebug :watch:assembleDebug :tv:assembleDebug --stacktrace
+          find android-project -path '*/build/outputs/apk/debug/*.apk' -type f -print
+
+      - name: Upload 3 APKs
         uses: actions/upload-artifact@v4
         with:
           name: QobuzRemote-v1-Phone-Wear-TV
           path: |
-            android-project/phone/build/outputs/apk/debug/phone-debug.apk
-            android-project/watch/build/outputs/apk/debug/watch-debug.apk
-            android-project/tv/build/outputs/apk/debug/tv-debug.apk
+            android-project/phone/build/outputs/apk/debug/*.apk
+            android-project/watch/build/outputs/apk/debug/*.apk
+            android-project/tv/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
