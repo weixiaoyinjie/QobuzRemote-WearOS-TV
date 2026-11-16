@@ -1,0 +1,58 @@
+name: Build Qobuz Remote (Phone + Wear + TV)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'QobuzRemote_v1_OneUpload.zip'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip complete Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s QobuzRemote_v1_OneUpload.zip
+          mkdir -p android-project
+          unzip -qo QobuzRemote_v1_OneUpload.zip -d android-project
+          test -s android-project/settings.gradle
+          test -s android-project/phone/src/main/java/com/local/qobuzremote/MainActivity.java
+          test -s android-project/watch/src/main/java/com/local/qobuzremote/WatchActivity.java
+          test -s android-project/tv/src/main/java/com/local/qobuzbridge/BridgeService.java
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK 35
+        uses: android-actions/setup-android@v3
+      - name: Install required SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build 3 APKs
+        shell: bash
+        run: gradle --no-daemon -p android-project :phone:assembleDebug :watch:assembleDebug :tv:assembleDebug --stacktrace
+      - name: Upload all APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: QobuzRemote-v1-Phone-Wear-TV
+          path: |
+            android-project/phone/build/outputs/apk/debug/phone-debug.apk
+            android-project/watch/build/outputs/apk/debug/watch-debug.apk
+            android-project/tv/build/outputs/apk/debug/tv-debug.apk
+          if-no-files-found: error
+          retention-days: 30
